@@ -230,7 +230,7 @@ fn main() {
     let mut last_seen_chromium_unix: i64 = chrono::Utc::now().timestamp();
     let mut last_seen_firefox_unix: i64 = chrono::Utc::now().timestamp();
 
-    // track last active window to avoid duplicate window logs
+    // track last activity types to reduce logging noise
     let mut last_window: Option<(String, String)> = None;
 
     // shared last-input timestamp (ms since epoch) updated by input listener
@@ -279,7 +279,7 @@ fn main() {
                                         let dt = chrono::DateTime::from_timestamp(*ts, 0)
                                             .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
                                             .naive_utc();
-
+                                        log_line(&format!("Browser (Chromium) visit: {} | {} | {}", dt, title, url));
                                     }
                                 }
                             }
@@ -296,8 +296,9 @@ fn main() {
                                 for (url, title, ts) in visits.iter().rev() {
                                     if *ts > last_seen_firefox_unix {
                                         last_seen_firefox_unix = *ts;
-                                        let dt = chrono::NaiveDateTime::from_timestamp_opt(*ts, 0)
-                                            .unwrap_or_else(|| chrono::NaiveDateTime::from_timestamp_opt(0,0).unwrap());
+                                        let dt = chrono::DateTime::from_timestamp(*ts, 0)
+                                            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
+                                            .naive_utc();
                                         log_line(&format!("Browser (Firefox) visit: {} | {} | {}", dt, title, url));
                                     }
                                 }
