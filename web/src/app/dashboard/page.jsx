@@ -89,6 +89,12 @@ export default function Dashboard() {
         <div className="container mx-auto px-4 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-gray-900">Chronos Dashboard</h1>
           <div className="flex items-center space-x-4">
+            <a 
+              href="/token"
+              className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm transition-colors"
+            >
+              Get Sync Token
+            </a>
             <span className="text-gray-600">Welcome, {session.user.name}</span>
             <button
               onClick={() => signOut()}

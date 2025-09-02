@@ -1,0 +1,34 @@
+# Rust
+/rust-client/target/
+/rust-client/Cargo.lock
+
+# Node.js
+/web/node_modules/
+/web/.next/
+/web/.env.local
+/web/npm-debug.log*
+/web/yarn-debug.log*
+/web/yarn-error.log*
+
+# Build artifacts
+/installers/*.exe
+/installers/chronos-setup.exe
+
+# Logs
+*.log
+activity_log.txt
+sync_token.txt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary files
+*.tmp
+*.temp

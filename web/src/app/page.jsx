@@ -36,17 +36,17 @@ export default function Home() {
         <div className="text-center space-y-4">
           <div className="space-x-4">
             <Link 
-              href="/auth/signin"
+              href="/download"
               className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-medium inline-block transition-colors"
             >
-              Get Started
+              Download for Windows
             </Link>
-            <a 
-              href="#"
-              className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-8 py-3 rounded-lg font-medium inline-block transition-colors"
+            <Link 
+              href="/auth/signin"
+              className="bg-white hover:bg-gray-50 text-blue-600 border border-blue-600 px-8 py-3 rounded-lg font-medium inline-block transition-colors"
             >
-              Download Installer
-            </a>
+              Sign In to Dashboard
+            </Link>
           </div>
           <p className="text-sm text-gray-500">
             Already have an account? <Link href="/auth/signin" className="text-blue-600 hover:underline">Sign in</Link>

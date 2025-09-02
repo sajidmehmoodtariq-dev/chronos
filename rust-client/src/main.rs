@@ -1,8 +1,9 @@
 use chrono::Local;
 use rusqlite::{Connection, Result as SqlResult};
 use rdev::{listen, Event};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -215,9 +216,150 @@ fn read_recent_firefox_visits(history_db: &Path, since_unix: i64, limit: i64) ->
     Ok(out)
 }
 
+// -------------------- sync structures --------------------
+
+#[derive(Serialize, Deserialize, Debug)]
+struct LogEntry {
+    timestamp: String,
+    #[serde(rename = "type")]
+    log_type: String,
+    data: serde_json::Value,
+}
+
+#[derive(Serialize)]
+struct SyncRequest {
+    logs: Vec<LogEntry>,
+}
+
+// -------------------- sync functions --------------------
+
+fn read_token_from_user() -> String {
+    println!("Please enter your sync token from the web dashboard:");
+    print!("> ");
+    io::stdout().flush().unwrap();
+    
+    let mut token = String::new();
+    io::stdin().read_line(&mut token).expect("Failed to read token");
+    token.trim().to_string()
+}
+
+fn load_token() -> Option<String> {
+    match std::fs::read_to_string("sync_token.txt") {
+        Ok(token) => Some(token.trim().to_string()),
+        Err(_) => None,
+    }
+}
+
+fn save_token(token: &str) {
+    let _ = std::fs::write("sync_token.txt", token);
+}
+
+async fn sync_logs_to_server(logs: Vec<LogEntry>, token: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    
+    let sync_request = SyncRequest { logs };
+    
+    let response = client
+        .post("https://chronos-red-five.vercel.app/api/sync")
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Content-Type", "application/json")
+        .json(&sync_request)
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        let result: serde_json::Value = response.json().await?;
+        println!("Sync successful: {}", result.get("message").unwrap_or(&serde_json::Value::String("Done".to_string())));
+    } else {
+        eprintln!("Sync failed: {}", response.status());
+    }
+
+    Ok(())
+}
+
+fn parse_log_line(line: &str) -> Option<LogEntry> {
+    // Parse format: "2025-09-02 13:02:55 - Active window: 'Title' (proc: App.exe)"
+    let parts: Vec<&str> = line.splitn(3, " - ").collect();
+    if parts.len() < 3 {
+        return None;
+    }
+
+    let timestamp = parts[0].trim();
+    let content = parts[2].trim();
+
+    if content.starts_with("Active window:") {
+        // Parse window activity
+        if let Some(start) = content.find("'") {
+            if let Some(end) = content.rfind("'") {
+                let title = &content[start + 1..end];
+                if let Some(proc_start) = content.find("(proc: ") {
+                    if let Some(proc_end) = content.rfind(")") {
+                        let process_name = &content[proc_start + 7..proc_end];
+                        
+                        let mut data = serde_json::Map::new();
+                        data.insert("windowTitle".to_string(), serde_json::Value::String(title.to_string()));
+                        data.insert("processName".to_string(), serde_json::Value::String(process_name.to_string()));
+
+                        return Some(LogEntry {
+                            timestamp: timestamp.to_string(),
+                            log_type: "window".to_string(),
+                            data: serde_json::Value::Object(data),
+                        });
+                    }
+                }
+            }
+        }
+    } else if content.contains("Browser") && content.contains("visit:") {
+        // Parse browser activity
+        let parts: Vec<&str> = content.split(" | ").collect();
+        if parts.len() >= 3 {
+            let browser_type = if content.contains("Firefox") { "Firefox" } else { "Chromium" };
+            let title = parts[1].trim();
+            let url = parts[2].trim();
+            
+            let mut data = serde_json::Map::new();
+            data.insert("browserType".to_string(), serde_json::Value::String(browser_type.to_string()));
+            data.insert("browserTitle".to_string(), serde_json::Value::String(title.to_string()));
+            data.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+
+            return Some(LogEntry {
+                timestamp: timestamp.to_string(),
+                log_type: "browser".to_string(),
+                data: serde_json::Value::Object(data),
+            });
+        }
+    }
+
+    None
+}
+
+async fn sync_local_logs(token: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if !Path::new("activity_log.txt").exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string("activity_log.txt")?;
+    let lines: Vec<&str> = content.lines().collect();
+    
+    let mut log_entries = Vec::new();
+    
+    for line in lines {
+        if let Some(entry) = parse_log_line(line) {
+            log_entries.push(entry);
+        }
+    }
+
+    if !log_entries.is_empty() {
+        sync_logs_to_server(log_entries, token).await?;
+    }
+
+    Ok(())
+}
+
 // -------------------- main loop --------------------
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // hide console if running as built exe (still visible during `cargo run`)
     #[cfg(windows)]
     unsafe {
@@ -225,6 +367,35 @@ fn main() {
     }
 
     log_line("Chronos started");
+
+    // Handle token setup
+    let token = match load_token() {
+        Some(token) => {
+            log_line("Found existing sync token");
+            token
+        }
+        None => {
+            println!("No sync token found. Please get one from the web dashboard.");
+            let token = read_token_from_user();
+            save_token(&token);
+            log_line("Token saved successfully!");
+            token
+        }
+    };
+
+    // Clone token for sync task
+    let sync_token = token.clone();
+    
+    // Spawn periodic sync task
+    tokio::spawn(async move {
+        let mut sync_interval = tokio::time::interval(Duration::from_secs(300)); // Sync every 5 minutes
+        loop {
+            sync_interval.tick().await;
+            if let Err(e) = sync_local_logs(&sync_token).await {
+                log_line(&format!("Sync error: {}", e));
+            }
+        }
+    });
 
     // track last seen times to avoid duplicate browser logs
     let mut last_seen_chromium_unix: i64 = chrono::Utc::now().timestamp();
@@ -240,7 +411,7 @@ fn main() {
         let last_input_clone = last_input.clone();
         thread::spawn(move || {
             // rdev::listen runs until error; we only update timestamp on events
-            let callback = move |event: Event| {
+            let callback = move |_event: Event| {
                 let now_ms = chrono::Utc::now().timestamp_millis();
                 last_input_clone.store(now_ms, Ordering::SeqCst);
             };
