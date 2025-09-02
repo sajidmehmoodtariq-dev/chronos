@@ -234,8 +234,29 @@ struct SyncRequest {
 // -------------------- sync functions --------------------
 
 fn read_token_from_user() -> String {
-    println!("Please enter your sync token from the web dashboard:");
-    print!("> ");
+    println!("🚀 Welcome to Chronos!");
+    println!("Setting up your account for the first time...");
+    println!();
+    
+    // Open the OAuth page in browser
+    let auth_url = "https://chronos-red-five.vercel.app/auth/signin?source=desktop";
+    println!("Opening your browser for authentication...");
+    
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/c", "start", auth_url])
+            .spawn()
+            .ok();
+    }
+    
+    println!("✅ Browser opened! Please:");
+    println!("1. Sign in with Google or GitHub");
+    println!("2. Go to 'Get Sync Token' in your dashboard");
+    println!("3. Copy your sync token");
+    println!("4. Paste it here");
+    println!();
+    print!("Enter your sync token: ");
     io::stdout().flush().unwrap();
     
     let mut token = String::new();
@@ -360,28 +381,43 @@ async fn sync_local_logs(token: &str) -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio::main]
 async fn main() {
-    // hide console if running as built exe (still visible during `cargo run`)
-    #[cfg(windows)]
-    unsafe {
-        let _ = FreeConsole();
-    }
-
-    log_line("Chronos started");
-
-    // Handle token setup
+    // Handle token setup first (with visible console)
     let token = match load_token() {
         Some(token) => {
-            log_line("Found existing sync token");
+            println!("✅ Chronos is running in the background");
+            println!("Dashboard: https://chronos-red-five.vercel.app/dashboard");
+            
+            // Hide console after showing startup message
+            #[cfg(windows)]
+            unsafe {
+                let _ = FreeConsole();
+            }
+            
             token
         }
         None => {
-            println!("No sync token found. Please get one from the web dashboard.");
+            // Keep console visible for first-time setup
+            println!("🎉 Welcome to Chronos Activity Tracker!");
+            println!();
             let token = read_token_from_user();
             save_token(&token);
-            log_line("Token saved successfully!");
+            println!("✅ Setup complete! Chronos is now running in the background.");
+            println!("You can close this window. Check your dashboard for activity data.");
+            
+            // Wait a bit so user can see the success message
+            thread::sleep(Duration::from_secs(3));
+            
+            // Now hide console
+            #[cfg(windows)]
+            unsafe {
+                let _ = FreeConsole();
+            }
+            
             token
         }
     };
+
+    log_line("Chronos started");
 
     // Clone token for sync task
     let sync_token = token.clone();

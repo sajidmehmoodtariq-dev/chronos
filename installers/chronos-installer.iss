@@ -1,7 +1,7 @@
 [Setup]
 AppName=Chronos Activity Tracker
 AppVersion=1.0.0
-AppPublisher=Chronos Team
+AppPublisher=Sajid Mehmood Tariq
 AppPublisherURL=https://chronos-red-five.vercel.app
 AppSupportURL=https://chronos-red-five.vercel.app
 AppUpdatesURL=https://chronos-red-five.vercel.app
@@ -15,6 +15,7 @@ SetupIconFile=
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+PrivilegesRequired=admin
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -35,7 +36,7 @@ Name: "{autodesktop}\Chronos Activity Tracker"; Filename: "{app}\chronos.exe"; T
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Chronos"; ValueData: """{app}\chronos.exe"""; Flags: uninsdeletevalue; Tasks: startup
 
 [Run]
-Filename: "{app}\chronos.exe"; Description: "{cm:LaunchProgram,Chronos Activity Tracker}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\chronos.exe"; Description: "{cm:LaunchProgram,Chronos Activity Tracker}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [UninstallRun]
 Filename: "taskkill"; Parameters: "/f /im chronos.exe"; Flags: runhidden
