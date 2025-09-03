@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::process::Command;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
 use windows::Win32::System::Console::FreeConsole;
 use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
@@ -20,12 +21,22 @@ use windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo;
 
 // -------------------- logging --------------------
 
+fn get_app_data_dir() -> PathBuf {
+    let mut path = std::env::var("APPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    path.push("Chronos");
+    std::fs::create_dir_all(&path).ok();
+    path
+}
+
 fn log_line(line: &str) {
     let now = Local::now();
+    let log_path = get_app_data_dir().join("activity_log.txt");
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("activity_log.txt")
+        .open(log_path)
         .unwrap();
     let _ = writeln!(file, "{} - {}", now.format("%Y-%m-%d %H:%M:%S"), line);
 }
@@ -265,14 +276,16 @@ fn read_token_from_user() -> String {
 }
 
 fn load_token() -> Option<String> {
-    match std::fs::read_to_string("sync_token.txt") {
+    let token_path = get_app_data_dir().join("sync_token.txt");
+    match std::fs::read_to_string(token_path) {
         Ok(token) => Some(token.trim().to_string()),
         Err(_) => None,
     }
 }
 
 fn save_token(token: &str) {
-    let _ = std::fs::write("sync_token.txt", token);
+    let token_path = get_app_data_dir().join("sync_token.txt");
+    let _ = std::fs::write(token_path, token);
 }
 
 async fn sync_logs_to_server(logs: Vec<LogEntry>, token: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -381,6 +394,19 @@ async fn sync_local_logs(token: &str) -> Result<(), Box<dyn std::error::Error>> 
 
 #[tokio::main]
 async fn main() {
+    // Set up panic hook to log panics
+    std::panic::set_hook(Box::new(|info| {
+        let location = info.location().map_or("unknown".to_string(), |l| format!("{}:{}", l.file(), l.line()));
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s
+        } else {
+            "Unknown panic"
+        };
+        log_line(&format!("PANIC at {}: {}", location, msg));
+    }));
+
     // Handle token setup first (with visible console)
     let token = match load_token() {
         Some(token) => {
@@ -398,7 +424,20 @@ async fn main() {
         None => {
             // Keep console visible for first-time setup
             println!("🎉 Welcome to Chronos Activity Tracker!");
+            println!("Opening browser for authentication...");
+            
+            // Open browser to signin page
+            let signin_url = "https://chronos-red-five.vercel.app/auth/signin?source=desktop";
+            let _ = Command::new("cmd")
+                .args(["/c", "start", signin_url])
+                .spawn();
+            
             println!();
+            println!("Please complete the authentication in your browser, then:");
+            println!("1. Visit: https://chronos-red-five.vercel.app/token");
+            println!("2. Copy your token and paste it below");
+            println!();
+            
             let token = read_token_from_user();
             save_token(&token);
             println!("✅ Setup complete! Chronos is now running in the background.");
@@ -422,7 +461,7 @@ async fn main() {
     // Clone token for sync task
     let sync_token = token.clone();
     
-    // Spawn periodic sync task
+    // Spawn periodic sync task with error handling
     tokio::spawn(async move {
         let mut sync_interval = tokio::time::interval(Duration::from_secs(300)); // Sync every 5 minutes
         loop {
@@ -457,69 +496,75 @@ async fn main() {
         });
     }
 
+    // Main loop with comprehensive error handling
     loop {
-        // determine idle via last_input timestamp (in ms)
-        let last_ms = last_input.load(Ordering::SeqCst);
-        let idle_ms = chrono::Utc::now().timestamp_millis() - last_ms;
-        let active = idle_ms < 60_000; // active if < 60s since last input
+        match tokio::time::timeout(Duration::from_secs(10), async {
+            // determine idle via last_input timestamp (in ms)
+            let last_ms = last_input.load(Ordering::SeqCst);
+            let idle_ms = chrono::Utc::now().timestamp_millis() - last_ms;
+            let active = idle_ms < 60_000; // active if < 60s since last input
 
-        if active {
-            if let Some((title, exe)) = active_window_title_and_process() {
-                // only log when window changes
-                if Some((title.clone(), exe.clone())) != last_window {
-                    log_line(&format!("Active window: '{}' (proc: {})", title, exe));
-                    last_window = Some((title.clone(), exe.clone()));
-                }
+            if active {
+                if let Some((title, exe)) = active_window_title_and_process() {
+                    // only log when window changes
+                    if Some((title.clone(), exe.clone())) != last_window {
+                        log_line(&format!("Active window: '{}' (proc: {})", title, exe));
+                        last_window = Some((title.clone(), exe.clone()));
+                    }
 
-                let exe_lower = exe.to_lowercase();
-                // Chromium family
-                if exe_lower.contains("chrome") || exe_lower.contains("msedge") || exe_lower.contains("brave") {
-                    if let Some(src) = chrome_history_path()
-                        .or_else(edge_history_path)
-                        .or_else(brave_history_path)
-                    {
-                        if let Some(copy) = copy_history_to_temp(&src, "chronos_chromium_history_copy.sqlite") {
-                            if let Ok(visits) = read_recent_chromium_visits(&copy, last_seen_chromium_unix, 20) {
-                                for (url, title, ts) in visits.iter().rev() {
-                                    if *ts > last_seen_chromium_unix {
-                                        last_seen_chromium_unix = *ts;
-                                        let dt = chrono::DateTime::from_timestamp(*ts, 0)
-                                            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
-                                            .naive_utc();
-                                        log_line(&format!("Browser (Chromium) visit: {} | {} | {}", dt, title, url));
+                    let exe_lower = exe.to_lowercase();
+                    // Chromium family
+                    if exe_lower.contains("chrome") || exe_lower.contains("msedge") || exe_lower.contains("brave") {
+                        if let Some(src) = chrome_history_path()
+                            .or_else(edge_history_path)
+                            .or_else(brave_history_path)
+                        {
+                            if let Some(copy) = copy_history_to_temp(&src, "chronos_chromium_history_copy.sqlite") {
+                                if let Ok(visits) = read_recent_chromium_visits(&copy, last_seen_chromium_unix, 20) {
+                                    for (url, title, ts) in visits.iter().rev() {
+                                        if *ts > last_seen_chromium_unix {
+                                            last_seen_chromium_unix = *ts;
+                                            let dt = chrono::DateTime::from_timestamp(*ts, 0)
+                                                .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
+                                                .naive_utc();
+                                            log_line(&format!("Browser (Chromium) visit: {} | {} | {}", dt, title, url));
+                                        }
                                     }
                                 }
+                                let _ = fs::remove_file(copy);
                             }
-                            let _ = fs::remove_file(copy);
                         }
                     }
-                }
 
-                // Firefox
-                if exe_lower.contains("firefox") {
-                    if let Some(src) = firefox_history_path() {
-                        if let Some(copy) = copy_history_to_temp(&src, "chronos_firefox_history_copy.sqlite") {
-                            if let Ok(visits) = read_recent_firefox_visits(&copy, last_seen_firefox_unix, 20) {
-                                for (url, title, ts) in visits.iter().rev() {
-                                    if *ts > last_seen_firefox_unix {
-                                        last_seen_firefox_unix = *ts;
-                                        let dt = chrono::DateTime::from_timestamp(*ts, 0)
-                                            .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
-                                            .naive_utc();
-                                        log_line(&format!("Browser (Firefox) visit: {} | {} | {}", dt, title, url));
+                    // Firefox
+                    if exe_lower.contains("firefox") {
+                        if let Some(src) = firefox_history_path() {
+                            if let Some(copy) = copy_history_to_temp(&src, "chronos_firefox_history_copy.sqlite") {
+                                if let Ok(visits) = read_recent_firefox_visits(&copy, last_seen_firefox_unix, 20) {
+                                    for (url, title, ts) in visits.iter().rev() {
+                                        if *ts > last_seen_firefox_unix {
+                                            last_seen_firefox_unix = *ts;
+                                            let dt = chrono::DateTime::from_timestamp(*ts, 0)
+                                                .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap())
+                                                .naive_utc();
+                                            log_line(&format!("Browser (Firefox) visit: {} | {} | {}", dt, title, url));
+                                        }
                                     }
                                 }
+                                let _ = fs::remove_file(copy);
                             }
-                            let _ = fs::remove_file(copy);
                         }
                     }
                 }
             }
-        } else {
-            // optional — you can log idle/active transitions if you want
-            // log_line("User idle");
-        }
 
-        thread::sleep(Duration::from_secs(5));
+            // Add error handling to prevent crashes
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }).await {
+            Ok(_) => {}, // Normal execution
+            Err(_) => {
+                log_line("Main loop timeout - continuing...");
+            }
+        }
     }
 }
