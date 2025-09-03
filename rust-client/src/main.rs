@@ -373,11 +373,12 @@ fn parse_log_line(line: &str) -> Option<LogEntry> {
 }
 
 async fn sync_local_logs(token: &str) -> Result<(), Box<dyn std::error::Error>> {
-    if !Path::new("activity_log.txt").exists() {
+    let log_path = get_app_data_dir().join("activity_log.txt");
+    if !log_path.exists() {
         return Ok(());
     }
 
-    let content = std::fs::read_to_string("activity_log.txt")?;
+    let content = std::fs::read_to_string(&log_path)?;
     let lines: Vec<&str> = content.lines().collect();
     
     let mut log_entries = Vec::new();
@@ -385,11 +386,20 @@ async fn sync_local_logs(token: &str) -> Result<(), Box<dyn std::error::Error>> 
     for line in lines {
         if let Some(entry) = parse_log_line(line) {
             log_entries.push(entry);
+        } else {
+            // Debug: log lines that couldn't be parsed
+            if line.trim().len() > 0 && !line.contains("No new log entries") && !line.contains("Starting main") && !line.contains("Main loop iteration") {
+                log_line(&format!("Could not parse log line: {}", line));
+            }
         }
     }
 
     if !log_entries.is_empty() {
+        let entry_count = log_entries.len();
         sync_logs_to_server(log_entries, token).await?;
+        log_line(&format!("Synced {} log entries to server", entry_count));
+    } else {
+        log_line("No new log entries to sync");
     }
 
     Ok(())
@@ -458,7 +468,7 @@ async fn main() {
     
     // Spawn periodic sync task with error handling
     tokio::spawn(async move {
-        let mut sync_interval = tokio::time::interval(Duration::from_secs(300)); // Sync every 5 minutes
+        let mut sync_interval = tokio::time::interval(Duration::from_secs(30)); // Sync every 30 seconds for testing
         loop {
             sync_interval.tick().await;
             if let Err(e) = sync_local_logs(&sync_token).await {
