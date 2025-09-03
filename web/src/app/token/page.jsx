@@ -2,9 +2,9 @@
 
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 
-export default function TokenPage() {
+function TokenPageContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -153,5 +153,25 @@ export default function TokenPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function LoadingSpinner() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md text-center">
+        <div className="text-6xl mb-4">⏳</div>
+        <h1 className="text-2xl font-bold text-gray-900 mb-2">Loading...</h1>
+        <p className="text-gray-600">Setting up token page</p>
+      </div>
+    </div>
+  );
+}
+
+export default function TokenPage() {
+  return (
+    <Suspense fallback={<LoadingSpinner />}>
+      <TokenPageContent />
+    </Suspense>
   );
 }

@@ -92,11 +92,16 @@ fn active_window_title_and_process() -> Option<(String, String)> {
 fn process_name_from_pid(pid: u32) -> Option<String> {
     unsafe {
         if pid == 0 { return None; }
-        let handle: HANDLE = OpenProcess(
+        let handle_result = OpenProcess(
             PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
             false,
             pid
-        ).expect("Failed to open process");
+        );
+        
+        let handle: HANDLE = match handle_result {
+            Ok(h) => h,
+            Err(_) => return None, // Can't access this process - skip it
+        };
 
         // buffer for exe name
         let mut buf = [0u16; 260];
@@ -412,13 +417,9 @@ async fn main() {
         Some(token) => {
             println!("✅ Chronos is running in the background");
             println!("Dashboard: https://chronos-red-five.vercel.app/dashboard");
+            println!("Press Ctrl+C to stop or simply close this window");
             
-            // Hide console after showing startup message
-            #[cfg(windows)]
-            unsafe {
-                let _ = FreeConsole();
-            }
-            
+            // Don't hide console immediately - wait until after setup
             token
         }
         None => {
@@ -441,16 +442,10 @@ async fn main() {
             let token = read_token_from_user();
             save_token(&token);
             println!("✅ Setup complete! Chronos is now running in the background.");
-            println!("You can close this window. Check your dashboard for activity data.");
+            println!("You can minimize this window. Check your dashboard for activity data.");
             
             // Wait a bit so user can see the success message
             thread::sleep(Duration::from_secs(3));
-            
-            // Now hide console
-            #[cfg(windows)]
-            unsafe {
-                let _ = FreeConsole();
-            }
             
             token
         }
@@ -479,30 +474,21 @@ async fn main() {
     // track last activity types to reduce logging noise
     let mut last_window: Option<(String, String)> = None;
 
-    // shared last-input timestamp (ms since epoch) updated by input listener
-    let last_input = Arc::new(AtomicI64::new(chrono::Utc::now().timestamp_millis()));
-    {
-        // spawn input listener thread (rdev) to track presence of keyboard/mouse activity
-        let last_input_clone = last_input.clone();
-        thread::spawn(move || {
-            // rdev::listen runs until error; we only update timestamp on events
-            let callback = move |_event: Event| {
-                let now_ms = chrono::Utc::now().timestamp_millis();
-                last_input_clone.store(now_ms, Ordering::SeqCst);
-            };
-            if let Err(err) = listen(callback) {
-                log_line(&format!("rdev listen error: {:?}", err));
-            }
-        });
-    }
+    // Simplified approach: assume user is always active for now
+    // This will be improved later once we get the basic tracking stable
+    log_line("Starting main activity tracking loop (simplified mode)...");
 
     // Main loop with comprehensive error handling
+    let mut loop_count = 0;
     loop {
+        loop_count += 1;
+        if loop_count % 12 == 1 { // Log every minute (12 * 5 seconds)
+            log_line(&format!("Main loop iteration: {}", loop_count));
+        }
+        
         match tokio::time::timeout(Duration::from_secs(10), async {
-            // determine idle via last_input timestamp (in ms)
-            let last_ms = last_input.load(Ordering::SeqCst);
-            let idle_ms = chrono::Utc::now().timestamp_millis() - last_ms;
-            let active = idle_ms < 60_000; // active if < 60s since last input
+            // For now, assume user is always active to test the basic functionality
+            let active = true;
 
             if active {
                 if let Some((title, exe)) = active_window_title_and_process() {
@@ -558,7 +544,6 @@ async fn main() {
                 }
             }
 
-            // Add error handling to prevent crashes
             tokio::time::sleep(Duration::from_secs(5)).await;
         }).await {
             Ok(_) => {}, // Normal execution
